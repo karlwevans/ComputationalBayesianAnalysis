@@ -1,0 +1,337 @@
+---
+title: "Assignment 3"
+author: "Karl Evans"
+date: "12/10/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install.packages("tidytuesday")
+pacman::p_load("rstan", "bayes4psy", "tidyverse", "bayesplot","rstantools") 
+pacman::p_load(tidyverse,skimr,ggplot2,lubridate,pracma,
+               reshape2, #for melt() function
+               bayesforecast, #for ggacf() better acf
+               paletteer #nice plot colours
+               )
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+```
+
+Theory a) Likelihood 
+\begin{align}
+p(y_i | \beta_j, \sigma^2) &\propto \prod_{i=1}^{n}\frac{1}{\sqrt{2\pi} \sigma} \exp -\frac{\left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2}{2 \sigma^2} \\
+& \propto \left(\frac{1}{\sqrt{2\pi}\sigma}\right)^n \exp\left(-\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2\right) 
+\end{align}
+
+
+b)  Posterior 
+\begin{align}
+p(\beta_j| y_i, \sigma^2) &\propto p(y_i | \beta_j, \sigma^2)p(\beta_j,\sigma^2) \\
+    & \propto p(y_i | \beta_j, \sigma^2)p(\beta_j) \\
+    & \propto \left(\frac{1}{\sqrt{2\pi}\sigma}\right)^n \exp\left(-\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2\right)\left[\sum_{j=1}^{p}\frac{1}{2b} \exp{-\frac{|\beta_j|}{b}} \right] \\
+    & \propto  \left(\frac{1}{\sqrt{2\pi}\sigma}\right)^n \left(\frac{1}{2b}\right) \exp\left(-\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2-\frac{1}{b}\sum_{j=1}^{p}|\beta_j| \right) 
+\end{align}
+ 
+
+The mode is the maximum value of the posterior, taking log simplifies this equation: \begin{align} \ln \left[\left(\frac{1}{\sqrt{2\pi}\sigma}\right)^n \left(\frac{1}{2b}\right)\right] - \left(\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2+\frac{1}{b}\sum_{j=1}^{p}|\beta_j| \right) \end{align} Then the maximum occurs when \begin{align} \frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2{-\frac{1}{b}} \sum_{j=1}^p |\beta_j| \end{align}
+
+c)  Posterior 
+First, need $$p(\beta)$$:
+\begin{align}
+p(\beta) &= \prod_{j=1}^{p} p(\beta_j) \\
+&= \prod_{j=1}^{p} \frac{1}{\sqrt{2\pi c}} \exp \left(-\frac{\beta_j^2}{2c}\right) \\
+&= \left(\frac{1}{\sqrt{2\pi c}}\right)^p \exp\left(-\frac{1}{2c} \sum_{j=1}^{p}\beta_j^2\right)
+\end{align}
+ 
+Then, the posterior is:
+\begin{align}
+p(\beta_j| y_i, \sigma^2) &\propto \left(\frac{1}{\sqrt{2\pi}\sigma}\right)^n \exp\left(-\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2\right)\ \left(\frac{1}{\sqrt{2\pi c}}\right)^p \exp\left(-\frac{1}{2c} \sum_{j=1}^{p}\beta_j^2\right)\\
+&\propto \left(\frac{1}{\sqrt{2\pi}\sigma}\right)^n \exp\left(-\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2\right)\ \left(\frac{1}{\sqrt{2\pi c}}\right)^p \exp\left(-\frac{1}{2c} \sum_{j=1}^{p}\beta_j^2\right)\\ 
+&\propto \left(\frac{1}{\sqrt{2\pi}\sigma}\right)^n\left(\frac{1}{\sqrt{2\pi c}}\right)^p  \exp\left(-\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2-\frac{1}{2c} \sum_{j=1}^{p}\beta_j^2\right)\\ 
+\end{align}
+
+This posterior is Gaussian so the mean and the mode occur at the maximum value for the posterior as above, taking log
+\begin{align} \ln\left[\left(\frac{1}{\sqrt{2\pi}\sigma}\right)^n\left(\frac{1}{\sqrt{2\pi c}}\right)^p \right]-\left(\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2+\frac{1}{2c} \sum_{j=1}^{p}\beta_j^2\right) \end{align} 
+Which is maximised, when the second bracketed term is minimsed 
+\begin{align}\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2+\frac{1}{2c} \sum_{j=1}^{p}\beta_j^2 \end{align} 
+Which is the ridge regression
+
+d)  P-Norms p-norm are a function of a vector onto the non-negative real numbers that behaves like the distance from the origin 
+$$||x||_p = \left(\sum_i|x_i|^p\right)^{1/p}$$
+Thus: 1-norm $$ ||x||_1 = \sum_i|x_i|=|x_1|+|x_2|+...+|x_i|$$ 
+2-norm $$ ||x||_2 = \sqrt{\sum_ix_i^2}=\sqrt{x_1^2+x_2^2+...+x_i^2}$$
+
+In this notation, Ridge and Lasso regression can be re-written as: 
+Lasso
+
+\begin{align}
+\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2{-\frac{1}{b}} \sum_{j=1}^p |\beta_j|
+\propto  ||\mathbf{Y}-\beta\mathbf{X}||_2^2+\frac{1}{b} ||\beta||_1
+\end{align}
+
+Ridge
+
+\begin{align}
+\frac{1}{2\sigma^2} \sum_{i=1}^{n} \left(y_i-\sum_{j=1}^{p}\beta_jx_{ij}\right)^2+\frac{1}{2c} \sum_{j=1}^{p}\beta_j^2 \propto ||\mathbf{Y}-\beta\mathbf{X}||_2^2+\frac{1}{2c}||\beta||_2^2
+\end{align}
+
+Ref: www.kaggle.com/residentmario/l1-norms-versus-l2-norms
+
+Practical 
+1. Dataset
+I have choosen the income distribution dataset
+```{r}
+income_distribution <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-02-09/income_distribution.csv')
+income_distribution %>%
+ggplot(aes(year, income_mean, col=race))+
+  geom_point()
+```
+Trends are duplicated in mixed race categories so these are removed. They add nothing to the analysis. Also remove pre-1990 data as Asian households are not included.
+```{r}
+income_distribution<-income_distribution %>% filter(race=='Asian Alone'|race=='Black Alone'|race=='Hispanic (Any Race)'|race=='White Alone')
+income_distribution<-income_distribution%>%filter(year>1990)
+income_distribution<-income_distribution %>% filter(income_bracket=="Under $15,000")
+income_distribution$year<-income_distribution$year-mean(income_distribution$year)
+income_distribution %>%
+ggplot(aes(year, income_mean, col=race))+
+  geom_point()
+```
+```{r}
+#white<-income_distribution%>%filter(race=='White Alone');
+#black<-income_distribution%>%filter(race=='Black Alone');
+#hispanic<-income_distribution%>%filter(race=='Hispanic (Any Race)');
+#asian<-income_distribution%>%filter(race=='Asian Alone');
+#white.lm<-lm(white$income_mean~white$year)
+#white.lm<-white.lm$coefficients
+#black.lm<-lm(black$income_mean~black$year)
+#black.lm<-black.lm$coefficients
+#hispanic.lm<-lm(hispanic$income_mean~hispanic$year)
+#hispanic.lm<-hispanic.lm$coefficients
+#asian.lm<-lm(asian$income_mean~asian$year)
+#asian.lm<-asian.lm$coefficients
+#models<-rbind(white.lm, black.lm, hispanic.lm, asian.lm)
+#colnames(models)<-c("Intercept","Slope")
+#print(as.tibble(models))
+#mean(models[,1])
+#sd(models[,1])
+#mean(models[,2])
+#sd(models[,2])
+
+```
+2.  Hierarchical model 
+Using slope of linear regression to investigate comparative change in incomes between the different races over time. 
+Uninformative priors on $$\phi_\alpha, \phi_\beta,$$
+Conjugate prior of normal on $$\tau_\alpha^2, \tau_\beta^2,\sigma_y^2 $$
+Normal distribution for all slopes and intercepts
+
+\begin{align}
+\phi_\alpha &\sim Normal(0,100) \\
+\phi_\beta &\sim  Normal(0,100) \\
+\tau_\alpha^2 &\sim Inv-Gamma(0.001,0.001)\\
+\tau_\beta^2 &\sim Inv-Gamma(0.001,0.001)\\
+\sigma_y^2 &\sim Inv-Gamma(0.001,0.001) \\
+\alpha_i|\phi_\alpha &\sim Normal(\phi_\alpha,\tau_\alpha) \\
+ \beta_i|\phi_\beta &\sim Normal(\phi_\beta,\tau_\beta) \\
+ y_{i,j} &\sim Normal(\alpha_i+\beta_i\times year_j, \sigma_y) 
+\end{align}
+
+
+3.  Justification
+```{r}
+income_distribution %>%
+ggplot(aes(race,income_mean))+
+  geom_point()
+
+```
+
+
+4.  rstan Implementation
+#Stan File Content
+data {
+  int<lower=0> N;
+  vector[N] year;
+  vector<lower=0>[N] income_white;
+  vector<lower=0>[N] income_black;
+  vector<lower=0>[N] income_hispanic;
+  vector<lower=0>[N] income_asian;
+  real<lower=0> sigma;
+  real<lower=0> year_mn;
+}
+
+# The parameters accepted by the model. 
+parameters {
+real<lower=0> alpha_white;
+ real<lower=0> alpha_black;
+  real<lower=0> alpha_hispanic;
+   real<lower=0> alpha_asian;
+real<lower=0> beta_white;
+ real<lower=0> beta_black; 
+  real<lower=0> beta_hispanic;
+   real<lower=0> beta_asian;
+real<lower=0> phi_alpha;
+real<lower=0> phi_beta;
+real <lower=0> sigmasq_y;
+real <lower=0> tausq_alpha;
+real <lower=0> tausq_beta;
+}
+
+transformed parameters{
+  real <lower=0> sigma_y ;
+    real <lower=0> tau_alpha ;
+      real <lower=0> tau_beta ;
+  sigma_y<-sqrt(sigmasq_y);
+  tau_alpha<-sqrt(tausq_alpha) ;
+  tau_beta<-sqrt(tausq_beta) ;
+}
+
+
+# The model to be estimated. 
+model {
+#Hyperpriors
+ phi_alpha ~ normal(0,100) ;
+  phi_beta ~ normal(0,100) ;
+ tausq_alpha ~inv_gamma(0.001,0.001) ;
+  tausq_beta ~inv_gamma(0.001,0.001) ;
+  sigmasq_y~inv_gamma(0.001,0.001) ;
+#Intercept
+alpha_white ~ normal(phi_alpha,  tau_alpha);
+  alpha_black ~ normal(phi_alpha,  tau_alpha);
+    alpha_hispanic ~ normal(phi_alpha,  tau_alpha);
+      alpha_asian ~ normal(phi_alpha,  tau_alpha);
+#Slope
+beta_white ~ normal(phi_beta,tau_beta);
+  beta_black ~ normal(phi_beta,tau_beta);
+    beta_hispanic ~ normal(phi_beta,tau_beta);
+      beta_asian ~ normal(phi_beta, tau_beta);  
+#Data Likelihood
+income_white ~ normal(alpha_white+beta_white*year,sigma_y);
+  income_black ~ normal(alpha_black+beta_black*year,sigma_y);
+    income_hispanic ~ normal(alpha_hispanic+beta_hispanic*year,sigma_y);
+      income_asian ~ normal(alpha_asian+beta_asian*year,sigma_y);
+}
+
+generated quantities {
+real y_white_rep[4];
+real y_black_rep[4];
+real y_hispanic_rep[4];
+real y_asian_rep[4];
+
+     for (i in 1:4){
+    y_white_rep[i]=normal_rng(alpha_white+beta_white*year[i],sigma);
+    y_black_rep[i]=normal_rng(alpha_black+beta_black*year[i],sigma);
+    y_hispanic_rep[i]=normal_rng(alpha_hispanic+beta_hispanic*year[i],sigma);
+    y_asian_rep[i]=normal_rng(alpha_asian+beta_asian*year[i],sigma);
+     }
+}
+
+
+
+```{r}
+N<-length(income_distribution$income_mean)/4
+white<-income_distribution%>%filter(race=='White Alone');
+  income_white<-white$income_mean;
+black<-income_distribution%>%filter(race=='Black Alone');
+ income_black<-black$income_mean;
+hispanic<-income_distribution%>%filter(race=='Hispanic (Any Race)');
+  income_hispanic<-hispanic$income_mean
+asian<-income_distribution%>%filter(race=='Asian Alone');
+     income_asian<-asian$income_mean
+year<-asian$year-mean(asian$year);
+year_mn<-mean(asian$year);
+temp_dat <- list(N = N, income_white=income_white,income_asian=income_asian, income_hispanic=income_hispanic, income_black=income_black, year=year, year_mn=year_mn, sigma=sd(income_distribution$income_mean))
+```
+
+```{r, include=FALSE}
+fit <- stan(file = 'Assignment3.stan', data = temp_dat,iter=1000)
+```
+
+```{r}
+print(fit, probs = c(0.25,0.975))
+```
+Rhat and Neff are acceptable
+
+
+6. Posterior Predictive Checks
+Since the model is Gaussian, I will compare mean and SDs from generated samples with the data:
+```{r}
+result<-rstan::extract(fit)
+result$y_white_rep[,1]
+white$income_mean[1]
+sd(result$y_white_rep[,1])
+white$income_mean_moe[1]
+
+mean(result$y_black_rep[,1])
+black$income_mean[1]
+sd(result$y_black_rep[,1])
+black$income_mean_moe[1]
+
+mean(result$y_hispanic_rep[,1])
+hispanic$income_mean[1]
+sd(result$y_hispanic_rep[,1])
+hispanic$income_mean_moe[1]
+
+mean(result$y_asian_rep[,1])
+asian$income_mean[1]
+sd(result$y_white_rep[,1])
+asian$income_mean_moe[1]
+```
+Means are fairly good but 
+
+
+```{r}
+traceplot(fit)
+```
+
+```{r}
+stan_ac(fit)
+stan_dens(fit)+geom_vline(xintercept=0,linetype=2)
+stan_scat
+```
+
+```{r}
+ppc_intervals(
+  y = asian$income_mean,
+  yrep = result$y_asian_rep,
+  x = asian$year,
+  prob = 0.5
+)
+```
+
+```{r}
+ppc_intervals(
+  y = white$income_mean,
+  yrep = result$y_white_rep,
+  x = white$year,
+  prob = 0.5
+)
+```
+
+```{r}
+ppc_intervals(
+  y = black$income_mean,
+  yrep = result$y_black_rep,
+  x = black$year,
+  prob = 0.5
+)
+```
+
+```{r}
+ppc_intervals(
+  y = hispanic$income_mean,
+  yrep = result$y_hispanic_rep,
+  x = hispanic$year,
+  prob = 0.5
+)
+```
+
+
+
+```{r}
+stan_diag(fit)
+```
+
+
+7.  Inferences
+
+The slopes (Beta values) are all within the 95% CI of each other so there is no significant difference in slopes of income growth between races over time.
