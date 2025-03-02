@@ -1,0 +1,679 @@
+---
+title: "Prac Exams"
+author: "Karl Evans"
+date: "03/11/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  fig.width = 6, 
+  fig.asp = 0.618, 
+  out.width = "100%",
+  fig.align = "center", 
+  root.dir = '../'
+)
+library(pacman)
+pacman::p_load(tidyverse,skimr,ggplot2,lubridate,pracma,dplyr,corrplot,
+               reshape2, #for melt() function
+               rstan,readr,plyr, grid, gridExtra,
+               bayesplot, rstanarm, loo, brms,
+               skimr, palmerpenguins 
+               ) #you may need to install and load the 'pacman' package to run this line
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+```
+
+# Goal 1: Tidy and Observe Data
+
+# Data
+
+```{r}
+pop<-read.csv("pop.csv")
+head(pop)
+```
+
+Integers to double:
+
+```{r}
+pop$popteach<- as.numeric(pop$popteach)
+pop$extrov<- as.numeric(pop$extrov)
+```
+
+# GOAL Learn factors that influence student popularity (POPULAR)
+
+Factorise categorical variables
+
+```{r}
+pop$gender<- as.factor(pop$gender)
+pop$pupil<- as.factor(pop$pupil)
+pop$class<- as.factor(pop$class)
+```
+
+Observe density of data of interest: student popularity
+
+```{r}
+summary(pop)
+ggplot(pop, aes(x = popular)) + 
+  geom_density()
+```
+
+\#Have a look at some combinations of predictors:
+
+```{r}
+p1=pop%>%ggplot(aes(x=reorder(gender,popular),y=popular))+geom_boxplot()
+p2=pop%>%ggplot(aes(x=reorder(class,popular),y=popular))+geom_boxplot()
+p3=pop%>%ggplot(aes(x=reorder(pupil,popular),y=popular))+geom_boxplot()
+p4=pop%>%ggplot(aes(x=extrov,y=popular, group=extrov))+geom_boxplot()
+p5=pop%>%ggplot(aes(x=popteach,y=popular, group=popteach))+geom_boxplot()
+grid.arrange(p1,p2,p3,p4,p5,ncol=3)
+```
+
+Popularity does not appear to relate to gender or extroversion
+Popularity does appear to relate to teacher popularity, pupil and maybe
+class.
+
+\#PopTeach
+
+```{r}
+p1=pop%>%ggplot(aes(x=reorder(gender,popteach),y=popteach))+geom_boxplot()
+p2=pop%>%ggplot(aes(x=reorder(class,popteach),y=popteach))+geom_boxplot()
+p3=pop%>%ggplot(aes(x=reorder(pupil,popteach),y=popteach))+geom_boxplot()
+p4=pop%>%ggplot(aes(x=reorder(extrov,popteach),y=popteach))+geom_boxplot()
+grid.arrange(p1,p2,p3,p4,ncol=2)
+```
+
+Teacher popularity relates to pupil but no other factors.
+
+\#Pupil
+
+```{r}
+boxplot(extrov~pupil, data=pop)
+pop%>%ggplot(aes(x=pupil,y=class, color=gender))+geom_point()
+```
+
+Not much happening here. No relationship between extroversion and pupil.
+All students attend 29 or 30 out of 30 classes
+
+\#Class
+
+```{r}
+pop%>%ggplot(aes(x=reorder(class, extrov), y=extrov))+geom_boxplot()
+```
+
+No relationship between class and extroversion
+
+\#Gender
+
+```{r}
+boxplot(extrov~gender, data=pop)
+```
+
+No patterns here
+
+\#Looking for a heirarchical model
+
+```{r}
+pop2 <- pop %>% 
+  select(pupil, popular, popteach, class) %>% 
+  mutate(pupil = fct_reorder(pupil,popular, .fun = 'mean'))
+pupil_means <- pop2 %>% 
+  group_by(pupil) %>%
+ dplyr::summarize(count = n(), popularity = mean(popular), popteach=mean(popteach))
+ggplot(pupil_means, aes(x = popularity)) + 
+  geom_density()
+plot(popularity~pupil, data=pupil_means)
+```
+
+```{r}
+pop3 <- pop %>% 
+  select(pupil, popular, popteach, class) %>% 
+  mutate(class = fct_reorder(class, popular, .fun = 'mean'))
+class_means <- pop3 %>% 
+  group_by(class) %>%
+ dplyr::summarize(count = n(), popularity = mean(popular), popteach=mean(popteach))
+ggplot(class_means, aes(x = popularity)) + 
+  geom_density()
+plot(popularity~class, data=class_means)
+```
+
+Try: 1) Linear model popular \~ popteach Later 2) Heirarchichal model:
+popteach \~ popular class \~ popteach
+
+```{r}
+class_means %>%ggplot(aes(x=popteach, y=popularity,color=class)) + geom_point() +
+  labs(caption=str_wrap("???"))
+```
+
+```{r}
+pupil_means %>%ggplot(aes(x=popteach, y=popularity,color=pupil)) + geom_point() +
+  labs(caption=str_wrap("???"))
+```
+
+# Goal 2: Fit Model
+
+```{r, message=FALSE}
+fit1 <- stan_glm(popular ~ popteach, data=pop)
+```
+
+```{r}
+stan_trace(fit1)
+```
+
+```{r}
+summary(fit1)
+```
+
+Looks good. Rhats all 1.0, large n_eff
+
+```{r}
+plot(fit1)
+```
+
+Coefficients are not zero, so a relationship exists.
+
+```{r}
+#vary intercept
+fit2 <-stan_glmer(popular ~ popteach+(1|pupil), data=pop)
+```
+
+```{r}
+#vary intercept and slope
+fit3 <- stan_glmer(popular ~ popteach+(1+popteach|pupil), data=pop)
+fit4<-stan_glmer(popular ~ popteach+(0+popteach|pupil), data=pop)
+```
+
+```{r}
+fit5 <- stan_glmer(popular ~ (1+popteach|pupil), data=pop)
+fit6<-stan_glmer(popular ~ (0+popteach|pupil), data=pop)
+```
+
+Examine plots of the posteriors for each pupil:
+
+```{r}
+summary(fit2)
+summary(fit3)
+plot(fit2)
+plot(fit3)
+```
+
+```{r}
+plot(fit3)
+```
+
+pupil is a reasonable predictor
+
+```{r}
+#vary intercept
+fit2a <-stan_glmer(popular ~ popteach+(1|class), data=pop)
+#vary intercept and slope
+fit3a <- stan_glmer(popular~ popteach+(1+popteach|class), data=pop)
+```
+
+```{r}
+summary(fit2a)
+summary(fit3a)
+plot(fit2a) 
+plot(fit3a)
+```
+
+class is not a good factor
+
+```{r}
+loo1<-loo(fit1, cores=2)
+loo2<-loo(fit2, cores=2)
+loo3<-loo(fit3, cores=2)
+loo4<-loo(fit4, cores=2)
+loo5<-loo(fit5, cores=2)
+loo6<-loo(fit6, cores=2)
+loo_compare(loo1,loo2, loo3, loo4, loo5, loo6)
+```
+
+Fit 3 is the best model
+
+\#PPC
+
+```{r}
+pp_check(fit3)
+pp_check(fit3, "stat")
+```
+
+Good
+
+```{r}
+ppc_intervals(
+  y = pop$popular,
+  yrep = posterior_predict(fit3),
+  x = pop$popteach,
+  prob = 0.5
+)
+```
+
+```{r}
+ppc_intervals(
+  y = pop$popular,
+  yrep = posterior_predict(fit1),
+  x = pop$popteach,
+  prob = 0.5
+)
+```
+
+Comparing with and without pupil confirms that including pupil is
+important
+
+\#3) Posterior Samples
+
+```{r}
+sims <- as.matrix(fit3)
+head(sims)
+```
+
+```{r}
+color_scheme_set("red")
+plot_title <- ggtitle("Posterior distributions","with medians and 90% intervals")
+mcmc_areas(sims, prob = 0.90) + plot_title
+```
+
+Coefficient for Popteach is not zero - relationship likely
+
+```{r}
+# area plot for single parameter
+mcmc_areas(sims,
+          pars = c("popteach", "sigma"),
+          prob = 0.90) + plot_title
+```
+
+nice
+
+```{r}
+# 90% credible intervals
+# using rstanarm function and model object
+posterior_interval(fit3, prob=.9)
+```
+
+```{r}
+# plot a bunch of regression lines from the simulations
+
+# Coercing a model to a data-frame returns a data-frame of posterior samples 
+# One row per sample.
+fits <- fit3%>% 
+  as_tibble() %>%
+dplyr::rename(intercept = `(Intercept)`, 
+              InterceptPupil1=`b[(Intercept) pupil:1]`, SlopePupil1=`b[popteach pupil:1]`,
+              InterceptPupil2=`b[(Intercept) pupil:2]`, SlopePupil2=`b[popteach pupil:2]`,
+              InterceptPupil3=`b[(Intercept) pupil:3]`, SlopePupil3=`b[popteach pupil:3]`,
+              InterceptPupil4=`b[(Intercept) pupil:4]`, SlopePupil4=`b[popteach pupil:4]`,
+              InterceptPupil5=`b[(Intercept) pupil:5]`, SlopePupil5=`b[popteach pupil:5]`,
+              InterceptPupil6=`b[(Intercept) pupil:6]`, SlopePupil6=`b[popteach pupil:6]`,
+              InterceptPupil7=`b[(Intercept) pupil:7]`, SlopePupil7=`b[popteach pupil:7]`,
+              InterceptPupil8=`b[(Intercept) pupil:8]`, SlopePupil8=`b[popteach pupil:8]`,
+              InterceptPupil9=`b[(Intercept) pupil:9]`, SlopePupil9=`b[popteach pupil:9]`,
+           InterceptPupil10=`b[(Intercept) pupil:10]`, SlopePupil10=`b[popteach pupil:10]`,
+           InterceptPupil11=`b[(Intercept) pupil:11]`, SlopePupil11=`b[popteach pupil:11]`,
+          InterceptPupil12=`b[(Intercept) pupil:12]`, SlopePupil12=`b[popteach pupil:12]`,
+           InterceptPupil13=`b[(Intercept) pupil:13]`, SlopePupil13=`b[popteach pupil:13]`,
+           InterceptPupil14=`b[(Intercept) pupil:14]`, SlopePupil14=`b[popteach pupil:14]`,
+          InterceptPupil15=`b[(Intercept) pupil:15]`, SlopePupil15=`b[popteach pupil:15]`,
+          InterceptPupil16=`b[(Intercept) pupil:16]`, SlopePupil16=`b[popteach pupil:16]` ) %>%
+select(-sigma)
+# what does the dataframe look like?
+head(fits)
+```
+
+```{r}
+# aesthetic controllers
+n_draws <- 500
+alpha_level <- .15
+color_draw <- "grey60"
+color_mean <-  "#3366FF"
+
+# make the plot
+ggplot(pop) + 
+  # first - set up the chart axes from original data
+  aes(x = popteach, y = popular) + 
+  # Plot a random sample of rows from the simulation df
+  # as gray semi-transparent lines
+  geom_abline(
+    aes(intercept = intercept+InterceptPupil1, slope = popteach+SlopePupil1), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+    geom_abline(
+    aes(intercept = intercept+InterceptPupil2, slope = popteach+SlopePupil2), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil3, slope = popteach+SlopePupil3), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil4, slope = popteach+SlopePupil4), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil5, slope = popteach+SlopePupil5), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil6, slope = popteach+SlopePupil6), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil7, slope = popteach+SlopePupil7), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil8, slope = popteach+SlopePupil8), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil9, slope = popteach+SlopePupil9), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil10, slope = popteach+SlopePupil10), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil11, slope = popteach+SlopePupil11), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil12, slope = popteach+SlopePupil12), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil13, slope = popteach+SlopePupil13), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil14, slope = popteach+SlopePupil14), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil15, slope = popteach+SlopePupil15), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+      geom_abline(
+    aes(intercept = intercept+InterceptPupil16, slope = popteach+SlopePupil16), 
+    data = sample_n(fits, n_draws), 
+    color = color_draw, 
+    alpha = alpha_level
+  ) + 
+  # Plot the mean values of our parameters in blue
+  # this corresponds to the coefficients returned by our 
+  # model summary
+  geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil1), 
+    slope = mean(fits$popteach+fits$SlopePupil1), 
+    size = 1, 
+    color = color_mean
+  ) +
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil2), 
+    slope = mean(fits$popteach+fits$SlopePupil2), 
+    size = 1, 
+    color = color_mean
+  ) +
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil3), 
+    slope = mean(fits$popteach+fits$SlopePupil3), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil4), 
+    slope = mean(fits$popteach+fits$SlopePupil4), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil5), 
+    slope = mean(fits$popteach+fits$SlopePupil5), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil6), 
+    slope = mean(fits$popteach+fits$SlopePupil6), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil7), 
+    slope = mean(fits$popteach+fits$SlopePupil7), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil8), 
+    slope = mean(fits$popteach+fits$SlopePupil8), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil9), 
+    slope = mean(fits$popteach+fits$SlopePupil9), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil10), 
+    slope = mean(fits$popteach+fits$SlopePupil10), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil11), 
+    slope = mean(fits$popteach+fits$SlopePupil11), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil12), 
+    slope = mean(fits$popteach+fits$SlopePupil12), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil13), 
+    slope = mean(fits$popteach+fits$SlopePupil13), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil14), 
+    slope = mean(fits$popteach+fits$SlopePupil14), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil15), 
+    slope = mean(fits$popteach+fits$SlopePupil15), 
+    size = 1, 
+    color = color_mean
+  )+
+   geom_abline(
+    intercept = mean(fits$intercept+fits$InterceptPupil16), 
+    slope = mean(fits$popteach+fits$SlopePupil16), 
+    size = 1, 
+    color = color_mean
+  )+
+  geom_point() + 
+  # set the axis labels and plot title
+  labs(x = 'popteach', 
+       y = 'popular' , 
+       title = 'Visualization of 500 Regression Lines From the Posterior Distribution')
+```
+
+```{r}
+posterior_vs_prior(fit3, group_by_parameter = TRUE, pars=c("(Intercept)"))
+posterior_vs_prior(fit3, group_by_parameter = TRUE, pars=c("popteach"))
+```
+
+Can adjust prior on intercept? What is current prior?
+
+```{r}
+prior_summary(fit3)
+```
+
+#Tweak prior
+
+```{r}
+#fit1 <- stan_glm(popular~popteach, data=pop,family=gaussian, prior_intercept = normal(5,1), autoscale=FALSE)
+#posterior_vs_prior(fit1, group_by_parameter = TRUE, pars=c("(Intercept)"))
+#prior_summary(fit1)
+```
+
+# Using the Model to Make Predictions
+
+```{r}
+sims <- as.matrix(fit3)
+head(sims)
+# we make predictions for when the mean teacher popularity is 5, pupil 2
+new <- data.frame(popteach = 5, pupil=1)
+new
+# simply using the single point summary of the posterior distributions
+# for the model coefficients (those displayed in the model summary above)
+y_point_est <- mean(posterior_predict(fit3, newdata = new))
+y_point_est
+# same prediction "by hand"
+y_point_est_2 <- mean(sims[,1]+sims[,3]) + mean(sims[,2]+sims[,4])*new[,1]
+y_point_est_2
+```
+
+```{r}
+# these are the same
+mean(posterior_predict(fit3, newdata = new))
+mean(sims[,1]+sims[,3]) + mean(sims[,2]+sims[,4])*new[,1]
+```
+
+# linear predictor with uncertainty using posterior_linpred
+
+```{r}
+par(mfrow=c(1,1))
+y_linpred <- posterior_linpred(fit3, newdata = new)
+# compute it "by hand"
+# we use the sims matrix we defined above 
+# sims <- as.matrix(fit_1)
+y_linpred_2 <-sims[,1]+sims[,3] + (sims[,2]+sims[,4])*5
+
+# check - these are the same!
+plot(y_linpred,y_linpred_2)
+cor.test(y_linpred, y_linpred_2)
+```
+
+# predictive distribution for a new observation using posterior_predict
+
+```{r}
+set.seed(1)
+y_post_pred <- posterior_predict(fit3, newdata = new)
+
+# calculate it "by hand"
+n_sims <- nrow(sims)
+sigma <- sims[,35]
+set.seed(1)
+y_post_pred_2 <- as.numeric(sims[,1]+sims[,3] + (sims[,2]+sims[,4])*5) + rnorm(n_sims, 0, sigma)
+
+# check - these are the same!
+plot(y_post_pred, y_post_pred_2)
+cor.test(y_post_pred, y_post_pred_2)
+```
+
+# Plotting the Predictive Distributions
+
+```{r}
+# create a dataframe containing the values from the posterior distributions 
+# of the predictions of daily total step count at 10 degrees Celcius
+post_dists <- as.data.frame(rbind(y_linpred, y_post_pred)) %>% 
+      setNames(c('prediction'))
+post_dists$pred_type <- c(rep('posterior_linpred', 1000),
+                          rep('posterior_predict', 1000))
+y_point_est_df = as.data.frame(y_point_est)
+
+# 70's colors - from NineteenEightyR package
+# https://github.com/m-clark/NineteenEightyR
+pal <- c('#FEDF37', '#FCA811', '#D25117', '#8A4C19', '#573420')
+
+ggplot(data = post_dists, aes(x = prediction, fill = pred_type)) + 
+  geom_histogram(alpha = .75, position="identity", binwidth = 0.5) + 
+  geom_point(data = y_point_est_df,
+             aes(x = y_point_est,
+                 y = 10,
+                 fill = 'Linear Point Estimate'),
+             color =  pal[2],
+             size = 4,
+             # alpha = .75,
+             show.legend = F) +
+  scale_fill_manual(name = "Prediction Method",
+                    values = c(pal[c(2,3,5)]),
+                    labels = c(bquote(paste("Linear Point Estimate ", italic("(predict)"))),
+                               bquote(paste("Linear Prediction With Uncertainty " , italic("(posterior_linpred)"))),
+                               bquote(paste("Posterior Predictive Distribution ",  italic("(posterior_predict)"))))) +
+  # set the plot labels and title
+  labs(x = "Predicted Popularity", 
+       y = "Count", 
+       title = 'Uncertainty in Posterior Prediction Methods')   +
+  theme_bw()
+```
+
+Mean predictions
+
+```{r}
+posterior_prob_pop <- colMeans(posterior_predict(fit3))
+pop_post<- pop %>% mutate(posterior_prob_pop)
+pop_post
+```
+
+Now visualize using a 2d histogram
+
+```{r}
+pop_post %>%  ggplot(aes(popteach,popular, color = posterior_prob_pop),size=2) + geom_point()
+```
+
+# Conclusion
+Given data contains 6 variables: Pupil, class, gender, extroversion, teacher popularity and pupil popularity. 
+Extroversion, teacher and pupil popularity are continuous. Pupil, class, gender are categorical.
+Only Pupil and teacher popularity relate to pupil popularity.
+The best model included in the investigation was a eriarchical bayesian model:
+
+
+\begin{align}
+popular_{ij] &\sim N(\alpha_j+\beta_j \times popteach_i,\sigma^2) \\
+\alpha_j &\sim N(4.7, 4.7)
+\beta_j &\sim N(0,1.6)
+\sigma &\sim Exp(0.53)
+\end{align} 
+
+A student that rates their teachers as more popular is then subsequently
+more likely to be rated as more popular themselves. 
