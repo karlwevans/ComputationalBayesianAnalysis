@@ -1,0 +1,229 @@
+---
+title: "Assignment 2"
+author: "Karl Evans"
+date: "08/09/2021"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+options(tinytex.verbose = TRUE)
+knitr::opts_chunk$set(
+echo = TRUE, 
+fig.width = 5, 
+fig.asp = 0.618, 
+ out.width = "70%",
+ fig.align = "center", 
+  root.dir = '../'
+)
+#install.packages("hexbin")
+#install.packages("pacman")
+pacman::p_load(tidyverse,skimr,ggplot2,lubridate,pracma,hexbin)
+```
+
+## Question 1
+$x_i|\theta_i,\beta$ ~ $Po(\theta_i)$ independently for $i=1,2,...,n$; \
+$\theta_i|\beta$ ~ $Exp(\beta)$ independently for $i=1,2,...,n$; \
+$\beta$ ~ $p(\beta) \propto \frac{1}{\beta}$ \
+
+a)  
+\begin{align}
+p(\boldsymbol{\theta},\beta|\boldsymbol{x}) &\propto p(x_i|\theta_i,\beta) \times p(\theta_i,\beta) \\
+&\propto p(x_i|\theta_i,\beta) \times p(\theta_i|\beta) \times p(\beta) \\
+&\propto  \prod_{i=1}^N [e^{-\theta_i} \frac{\theta_i^{x_i}}{x_i!} \times \beta e^{-\beta \theta_i} ] \frac{1}{\beta} \\
+&\propto \beta^{N-1} \prod_{i=1}^N e^{-\theta_i(1+\beta)} \theta_i^{x_i} \\
+&\end{align}
+
+b)
+\begin{align}
+p(\boldsymbol{\theta}|\beta, \boldsymbol{x}) &\propto \frac{p(\boldsymbol{\theta},\beta|\boldsymbol{x})}{ p(\beta)} \\
+&\propto p(x_i|\theta_i,\beta) \times p(\theta_i|\beta)  \\
+&\propto  \prod_{i=1}^N e^{-\theta_i} \frac{\theta_i^{x_i}}{x_i!} \times \beta e^{-\beta \theta_i}  \\
+&\propto  \prod_{i=1}^N e^{-\theta_i} \theta_i^{x_i} \times e^{-\beta \theta_i}   \\
+&\propto \prod_{i=1}^N e^{-\theta_i(1+\beta)} \theta_i^{x_i} \\
+&\propto e^{\theta_1-\beta\theta_1} \theta_1^{x_1}\times e^{\theta_2-\beta\theta_2} \theta_2^{x_2}\times e^{\theta_3-\beta\theta_3} \theta_3^{x_3} \times ... \times e^{\theta_n-\beta\theta_n} \theta_n^{x_n} \\
+\end{align}
+
+Since the posterior is factorisable into function of each $\theta_i$, they are independent
+
+c)  By independence: 
+\begin{align}
+p(\theta_i|\theta_1,...,\theta_{i-1}, \theta_{i+1},...,\theta_n,\beta,\boldsymbol{x}) &= p(\boldsymbol{\theta}|\beta, \boldsymbol{x}) \\
+&\propto e^{-\theta_i-\beta\theta_i} \theta_i^{x_i} \\
+&\sim Gamma(x_i+1,\beta+1) 
+\end{align}
+
+d)  
+\begin{align}
+p(\beta|\boldsymbol{\theta,x}) &\propto p(\boldsymbol{\theta,x}|\beta)p(\beta) \\
+&\propto p(\boldsymbol{x}|\boldsymbol{\theta},\beta)p(\boldsymbol{\theta}|\beta)p(\beta) \\
+&\propto  \prod_{i=1}^N [e^{-\theta_i} \frac{\theta_i^{x_i}}{x_i!} \times \beta e^{-\beta \theta_i} ] \frac{1}{\beta} \\
+&\propto  \frac{1}{\beta}\prod_{i=1}^N \beta e^{-\beta \theta_i}  \\
+&\propto  \beta^{N-1}\prod_{i=1}^N e^{-\beta \theta_i}  \\
+&\propto  \beta^{N-1} e^{ -\beta \sum_i \theta_i} \\
+&\sim Gamma(n, \sum_i \theta_i) \\
+\end{align}
+
+
+e)  Iterative step of Gibbs Sampler is simulating $\theta_i^{j}$ by sampling $p(\boldsymbol{\theta}|\beta,\boldsymbol{x})$ \~ Gamma($x_i+1,\beta^{j-1}+1$) and $\beta^{j}$ from $p(\beta|\boldsymbol{\theta,x})$ \~ Gamma(n, $\sum_i\theta_i$)
+
+## Quesion 2
+
+```{r}
+gibbs <- function(beta,theta,x,n.samples){
+   n <- length(theta)
+   
+#initialise matrix to save our output.
+beta_theta=matrix(0,nrow=n.samples+1,ncol=n+1) 
+#name columns
+colnames(beta_theta) <- c("beta",rep(c("theta"), times = n))
+#setting first row of matrix to theta0 and beta0
+beta_theta[1,] = c(beta,theta)   
+  
+## Iterative Step
+for (i in 2:(n.samples+1)){
+  #simulate theta n times
+  beta_theta[i,2:(n+1)] = rgamma(n,shape=x+1, rate=(beta_theta[i-1,1]+1)) 
+  #calc sum of thetas, required to sim beta
+  sum_theta=sum(beta_theta[i,2:n+1]) 
+  #simulate beta 
+   beta_theta[i,1]= rgamma(1,shape=n,rate=sum_theta) # sim beta 
+}
+#discard initial conditions
+beta_theta_trunc <- beta_theta[-1,] 
+#return matrix
+return(beta_theta_trunc)
+}
+```
+
+```{r}
+#Test function with given inputs
+n=3
+beta <- 1
+theta <- c(1:n)
+x<- c(1:n)
+n.samples <- 5 
+#call function
+beta_theta<-gibbs(beta,theta,x,n.samples)
+beta_theta
+```
+
+
+```{r}
+gibbed<-data.frame(beta=beta_theta[,1],theta1=beta_theta[,2])
+gibbed %>% 
+ ggplot( aes(x=beta, y=theta1) ) +
+  geom_bin2d(bins = 40) + #or try geom_hex
+  scale_fill_continuous(type = "viridis") +
+  theme_bw() 
+```
+
+## Question 3
+
+a)  A Poisson Distribution may be appropriate because the number of days absent can be interpreted as the sum of binomial trials (either present/absent) for each school day with the number of trials being large (supposing school days ~200/year) compared to the probability of absence (~0.05, from a quick look at our data).
+
+b)  
+```{r}
+attendance_data<-c(6,6,14,3,29,12,16,7,30,5,34,16,15,21,9,11,7,4,4,4,3,16);
+attendance_data
+xmean=mean(attendance_data)
+xmean
+xvar=var(attendance_data)
+xvar
+```
+
+c)  Mean and variance of our sample are not equal where they should be for a Poisson distribution.
+
+d)  The Poisson Distribution requires constant mean rate while each event in our model, and absent day, is unlikely to be independent and so the rate is unlikely to be constant.
+
+## Question 4
+
+a)  
+```{r}
+# given beta0
+beta0=1/xmean
+# uninformative theta0
+theta0<-c(rep(0,22))
+n.samples0<-100000
+
+# call Gibbs function
+beta_theta2<-gibbs(beta0,theta0,attendance_data,n.samples0)
+# Check output
+head(beta_theta2)
+```
+
+Look at the data
+```{r}
+# Dataframe for plots
+gibbed2<-data.frame(beta2=beta_theta2[,1],theta21=beta_theta2[,2])
+
+#Observe plots for burn in
+gibbed2 %>% 
+ggplot( aes(x=beta2, y=theta21) ) +
+  geom_hex(bins = 40) + #or try geom_bin2d
+ scale_fill_continuous(type = "viridis") +
+  theme_bw()
+```
+
+Not necessary to remove burn in as the data quickly concentrates.
+
+```{r}
+beta_theta_trunced <- beta_theta2[-1:-10000,] 
+gibbed3 <-data.frame(betat=beta_theta_trunced[,1],theta1t=beta_theta_trunced[,2])
+p <- gibbed3 %>% 
+ ggplot( aes(x=betat, y=theta1t) ) +
+geom_hex(bins = 40) +
+  scale_fill_continuous(type = "viridis") +
+  theme_bw() 
+p
+```
+Removing first 10% makes no difference.
+
+b)  $\gamma$ = $\frac{1}{\beta}=E(X)$ is expected number of days absent
+```{r}
+gamma<-1/gibbed2$beta2
+quantile(gamma,c(0.025,0.975))
+```
+
+c)  Looking at $x_1$:
+Histogram and 95% Confidence Interval of $\theta_1$
+```{r}
+gibbed2 %>% 
+ggplot(aes(theta21)) +
+  geom_histogram(binwidth = 0.5)+
+labs(x = expression(theta[1]))
+
+quantile(gibbed2$theta21,c(0.025,0.975))
+
+```
+
+ii) Histogram and 95% Confidence Interval of $x_1$
+```{r}
+x_samples<-rpois(n.samples0,gibbed2$theta21)
+ggplot() +
+  aes(x_samples) +
+  geom_histogram()+
+labs(x = expression(x[1]))
+quantile(x_samples,c(0.025,0.975))
+```
+
+d)  Looking at $x$ by simulating a random $\theta$:
+Sample of $x$
+```{r}
+# Posterior Predictive of random student
+theta_samples<-rexp(n.samples0,gibbed2$beta2)
+x_rand_theta<-rpois(n.samples0,theta_samples)
+
+mean(x_rand_theta)
+var(x_rand_theta)
+```
+
+ii) Mean and Variance of Posterior Predictive Distribution vs Data
+```{r}
+mean(attendance_data)
+mean(x_rand_theta)
+var(attendance_data)
+var(x_rand_theta)
+```
+
+Mean is very close, while variance is higher for the simulated data. This is as expected since were are using a hierarchy of probabilities, and thus compounding variance, to generate the samples.
